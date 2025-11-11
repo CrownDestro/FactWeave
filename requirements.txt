@@ -1,0 +1,16 @@
+pandas
+numpy
+scikit-learn
+xgboost
+sentence-transformers
+imbalanced-learn
+matplotlib
+seaborn
+flask
+transformers
+datasets
+joblib
+tqdm
+networkx
+community
+shap
