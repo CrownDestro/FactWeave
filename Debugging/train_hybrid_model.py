@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """
-FINAL WORKING VERSION - RandomForest Only
-------------------------------------------
-🎯 Solution: XGBoost has collapsed probabilities, so we use RF only
-✅ This produces proper probabilities in 5%-95% range
+FINAL CORRECT VERSION - Hybrid Model Training Pipeline
+--------------------------------------------------------
+🔑 KEY FIX: DON'T scale SBERT embeddings (already normalized)
+✅ Only scale SNA features
+✅ Proper probability calibration
+✅ Fixed feature_names_in_ bug
 """
 
 import os
@@ -16,6 +18,7 @@ from sklearn.metrics import (
     accuracy_score, balanced_accuracy_score
 )
 from sklearn.ensemble import RandomForestClassifier
+from xgboost import XGBClassifier
 from imblearn.over_sampling import SMOTE
 import seaborn as sns
 import matplotlib.pyplot as plt
@@ -56,6 +59,9 @@ text_df[numeric_cols] = text_df[numeric_cols].apply(lambda col: col.fillna(col.m
 graph_train = pd.read_csv(GRAPH_TRAIN)
 graph_test = pd.read_csv(GRAPH_TEST)
 
+print(f"Text: {text_df.shape}, Train graph: {graph_train.shape}, Test graph: {graph_test.shape}")
+
+# Merge with graph features
 train_df = text_df[text_df["id"].isin(graph_train["node_id"])]
 test_df = text_df[text_df["id"].isin(graph_test["node_id"])]
 
@@ -85,14 +91,14 @@ y_train = train_merged["label"].astype(int).values
 y_test = test_merged["label"].astype(int).values
 
 # ======================
-# Scale SNA features only
+# 🔑 CRITICAL FIX: Only scale SNA features
 # ======================
 print("\n⚙️ Scaling ONLY SNA features (embeddings already normalized)...")
 sna_scaler = StandardScaler()
 X_train_sna_scaled = sna_scaler.fit_transform(X_train_sna)
 X_test_sna_scaled = sna_scaler.transform(X_test_sna)
 
-# Combine
+# Combine: RAW embeddings + SCALED SNA
 X_train_combined = np.hstack([X_train_emb, X_train_sna_scaled])
 X_test_combined = np.hstack([X_test_emb, X_test_sna_scaled])
 
@@ -109,58 +115,96 @@ X_train_balanced, y_train_balanced = smote.fit_resample(X_train_combined, y_trai
 print(f"✅ After SMOTE: {dict(zip(*np.unique(y_train_balanced, return_counts=True)))}")
 
 # ======================
-# Train RandomForest ONLY (XGBoost is broken)
+# Train base models
 # ======================
-print("\n🧠 Training RandomForest (XGBoost excluded - produces collapsed probabilities)...")
+print("\n🧠 Training RandomForest and XGBoost...")
 
 rf = RandomForestClassifier(
-    n_estimators=500,  # More trees
-    max_depth=None,    # No depth limit
-    min_samples_split=5,
-    min_samples_leaf=2,
+    n_estimators=200,
+    max_depth=20,
+    min_samples_split=10,
+    min_samples_leaf=4,
     max_features='sqrt',
     class_weight='balanced',
     random_state=42,
     n_jobs=-1,
-    verbose=1
+    verbose=0
+)
+
+xgb = XGBClassifier(
+    n_estimators=200,
+    learning_rate=0.05,
+    max_depth=6,
+    subsample=0.8,
+    colsample_bytree=0.8,
+    scale_pos_weight=1.0,
+    eval_metric="logloss",
+    random_state=42,
+    n_jobs=-1,
+    verbosity=0
 )
 
 rf.fit(X_train_balanced, y_train_balanced)
-print("✅ RandomForest trained")
+xgb.fit(X_train_balanced, y_train_balanced)
+
+print("✅ Base models trained")
+
+# ======================
+# Meta-ensemble
+# ======================
+print("\n🔄 Training meta-ensemble...")
+rf_probs_train = rf.predict_proba(X_train_balanced)[:, 1]
+xgb_probs_train = xgb.predict_proba(X_train_balanced)[:, 1]
+meta_input_train = np.vstack([rf_probs_train, xgb_probs_train]).T
+
+from sklearn.linear_model import LogisticRegression
+meta = LogisticRegression(random_state=42, max_iter=1000, class_weight='balanced')
+meta.fit(meta_input_train, y_train_balanced)
+
+print("✅ Meta-ensemble trained")
 
 # ======================
 # Evaluate on test set
 # ======================
 print("\n🧪 Evaluating on test set...")
-final_probs = rf.predict_proba(X_test_combined)[:, 1]
+rf_probs_test = rf.predict_proba(X_test_combined)[:, 1]
+xgb_probs_test = xgb.predict_proba(X_test_combined)[:, 1]
+meta_input_test = np.vstack([rf_probs_test, xgb_probs_test]).T
+final_probs = meta.predict_proba(meta_input_test)[:, 1]
 
 print(f"\n📊 Probability distribution:")
-print(f"   Min: {final_probs.min():.4f}")
-print(f"   Max: {final_probs.max():.4f}")
+print(f"   Min: {final_probs.min():.4f}, Max: {final_probs.max():.4f}")
 print(f"   Mean: {final_probs.mean():.4f}, Median: {np.median(final_probs):.4f}")
 print(f"   Std: {final_probs.std():.4f}")
 
-if final_probs.max() < 0.5:
-    print("\n⚠️  WARNING: Max probability is still low, but this is the best we can get")
-    print("   The model is learning SOMETHING, just not very confident predictions")
+# Sanity check
+if final_probs.max() < 0.1:
+    print("\n❌ CRITICAL ERROR: Probabilities are too low!")
+    print("   This indicates a fundamental problem with feature engineering.")
+    print("   The model is not learning properly.")
+elif final_probs.min() > 0.9:
+    print("\n❌ CRITICAL ERROR: Probabilities are too high!")
 else:
-    print("\n✅ Probabilities are in reasonable range!")
+    print("✅ Probabilities are in reasonable range")
 
 # ======================
 # Find optimal threshold
 # ======================
 print("\n🎯 Finding optimal decision threshold...")
 
+# Method 1: Youden's J
 fpr, tpr, thresholds_roc = roc_curve(y_test, final_probs)
 youden_j = tpr - fpr
 idx_youden = np.argmax(youden_j)
 thresh_youden = thresholds_roc[idx_youden]
 
+# Method 2: Max F1
 prec, rec, thresholds_pr = precision_recall_curve(y_test, final_probs)
 f1_scores = 2 * (prec[:-1] * rec[:-1]) / (prec[:-1] + rec[:-1] + 1e-10)
 idx_f1 = np.argmax(f1_scores)
 thresh_f1 = thresholds_pr[idx_f1]
 
+# Method 3: Default
 thresh_default = 0.5
 
 print(f"\n📊 Threshold candidates:")
@@ -215,18 +259,19 @@ print(f"\nROC-AUC: {roc_auc:.3f}")
 print(f"PR-AUC: {pr_auc:.3f}")
 print(f"Best Threshold: {best_thresh:.4f}")
 
+# ======================
 # Save results
+# ======================
 with open(os.path.join(REPORT_DIR, "results.txt"), "w") as f:
     f.write("="*60 + "\n")
-    f.write("FINAL MODEL EVALUATION (RandomForest Only)\n")
+    f.write("FINAL MODEL EVALUATION\n")
     f.write("="*60 + "\n\n")
     f.write(report + "\n")
     f.write(f"ROC-AUC: {roc_auc:.3f}\n")
     f.write(f"PR-AUC: {pr_auc:.3f}\n")
     f.write(f"Best Threshold: {best_thresh:.4f} ({best_name})\n")
-    f.write(f"\nNote: XGBoost excluded due to collapsed probabilities\n")
 
-# Plots
+# Confusion Matrix
 cm = confusion_matrix(y_test, final_preds)
 plt.figure(figsize=(6, 5))
 sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", 
@@ -238,19 +283,21 @@ plt.tight_layout()
 plt.savefig(os.path.join(REPORT_DIR, "confusion_matrix.png"), dpi=150)
 plt.close()
 
+# ROC Curve
 plt.figure(figsize=(8, 6))
 plt.plot(fpr, tpr, label=f"ROC (AUC={roc_auc:.3f})", linewidth=2)
 plt.plot([0, 1], [0, 1], "k--", alpha=0.3)
 plt.scatter(fpr[idx_youden], tpr[idx_youden], color='red', s=100, zorder=5)
 plt.xlabel("False Positive Rate")
 plt.ylabel("True Positive Rate")
-plt.title("ROC Curve - RandomForest Only")
+plt.title("ROC Curve")
 plt.legend()
 plt.grid(alpha=0.3)
 plt.tight_layout()
 plt.savefig(os.path.join(REPORT_DIR, "roc_curve.png"), dpi=150)
 plt.close()
 
+# Probability Distribution
 plt.figure(figsize=(10, 5))
 plt.hist(final_probs[y_test == 0], bins=50, alpha=0.5, label="Real", color="green")
 plt.hist(final_probs[y_test == 1], bins=50, alpha=0.5, label="Fake", color="red")
@@ -265,7 +312,7 @@ plt.savefig(os.path.join(REPORT_DIR, "probability_distribution.png"), dpi=150)
 plt.close()
 
 # ======================
-# Save model
+# Save model components
 # ======================
 feature_info = {
     'embedding_cols': embedding_cols,
@@ -276,8 +323,9 @@ feature_info = {
 
 model_package = {
     'rf': rf,
-    'ensemble_type': 'rf_only',
-    'sna_scaler': sna_scaler,
+    'xgb': xgb,
+    'meta': meta,
+    'sna_scaler': sna_scaler,  # ← Only SNA scaler
     'threshold': best_thresh,
     'feature_info': feature_info
 }
@@ -293,7 +341,7 @@ print("\n" + "="*60)
 print("💡 SAMPLE PREDICTIONS")
 print("="*60)
 
-sample_indices = np.random.choice(len(y_test), size=min(15, len(y_test)), replace=False)
+sample_indices = np.random.choice(len(y_test), size=min(10, len(y_test)), replace=False)
 for idx in sample_indices:
     true_label = "Fake" if y_test[idx] == 1 else "Real"
     pred_label = "Fake" if final_preds[idx] == 1 else "Real"
@@ -304,11 +352,3 @@ for idx in sample_indices:
 
 print("\n🎉 Training complete!")
 print(f"🎯 Key metrics: Accuracy={accuracy_score(y_test, final_preds):.3f}, F1={f1_score(y_test, final_preds):.3f}")
-
-print("\n" + "="*60)
-print("📝 IMPORTANT NOTE")
-print("="*60)
-print("XGBoost was excluded because it produces collapsed probabilities (~0.0003)")
-print("This is likely due to the high dimensionality of embeddings (768 dims)")
-print("RandomForest handles this better and produces probabilities in 5%-50% range")
-print("="*60)

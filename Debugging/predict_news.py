@@ -1,32 +1,36 @@
 #!/usr/bin/env python3
 """
-FINAL Prediction Script - RandomForest Only
---------------------------------------------
-Matches the RF-only training approach
+FINAL CORRECT VERSION - Prediction Script
+------------------------------------------
+✅ Matches training: raw embeddings + scaled SNA
+✅ Uses sna_scaler (not unified scaler)
 """
 
 import sys
 import joblib
 import numpy as np
+import pandas as pd
 from sentence_transformers import SentenceTransformer
 
 MODEL_PATH = "data/model/hybrid_model.pkl"
 
 def predict_news(text: str):
-    """Predict whether news text is fake or real."""
-    
+    """
+    Predict whether news text is fake or real.
+    """
     # Load trained model package
     model_package = joblib.load(MODEL_PATH)
     rf = model_package['rf']
-    ensemble_type = model_package.get('ensemble_type', 'unknown')
-    sna_scaler = model_package['sna_scaler']
+    xgb = model_package['xgb']
+    meta = model_package['meta']
+    sna_scaler = model_package['sna_scaler']  # ← Only SNA scaler
     best_thresh = model_package['threshold']
     feature_info = model_package['feature_info']
     
     encoder = SentenceTransformer("all-mpnet-base-v2")
 
     print("🧠 Encoding text with SBERT...")
-    embedding = encoder.encode([text], normalize_embeddings=True)
+    embedding = encoder.encode([text])
     
     # Create SNA features (neutral placeholders)
     n_sna = feature_info['n_sna_features']
@@ -38,8 +42,13 @@ def predict_news(text: str):
     # Combine: RAW embedding + SCALED SNA
     X_combined = np.hstack([embedding, sna_scaled])
 
-    # Get prediction
-    prob_fake = float(rf.predict_proba(X_combined)[:, 1][0])
+    # Ensemble predictions
+    rf_prob = rf.predict_proba(X_combined)[:, 1]
+    xgb_prob = xgb.predict_proba(X_combined)[:, 1]
+    meta_input = np.vstack([rf_prob, xgb_prob]).T
+    
+    # Meta-model output: P(fake)
+    prob_fake = float(meta.predict_proba(meta_input)[:, 1][0])
     prob_real = 1.0 - prob_fake
 
     # Make prediction
@@ -57,7 +66,6 @@ def predict_news(text: str):
     print(f"   Real: {real_pct:.2f}%")
     print(f"📊 Model threshold: {best_thresh:.4f} ({best_thresh*100:.2f}%)")
     print(f"🏷️  Predicted Label: {predicted_label}")
-    print(f"ℹ️  Model type: {ensemble_type}")
     
     # Confidence
     if prob_fake > best_thresh:
@@ -74,8 +82,7 @@ def predict_news(text: str):
         "real_probability": round(real_pct, 2),
         "predicted_label": predicted_label,
         "confidence": round(confidence, 2),
-        "threshold": round(best_thresh, 4),
-        "model_type": ensemble_type
+        "threshold": round(best_thresh, 4)
     }
 
 

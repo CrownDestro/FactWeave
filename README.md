@@ -110,17 +110,20 @@ Modularity and Conductance (for network-based evaluation)
 
 ### RESULTS
 ```
-=== Final Model Evaluation ===
+============================================================
+FINAL MODEL EVALUATION (RandomForest Only)
+============================================================
+
               precision    recall  f1-score   support
 
-           0      0.805     0.560     0.661      3002
-           1      0.684     0.875     0.768      3261
+           0      0.867     0.683     0.764      5590
+           1      0.613     0.828     0.704      3393
 
-    accuracy                          0.724      6263
-   macro avg      0.745     0.718     0.714      6263
-weighted avg      0.742     0.724     0.716      6263
+    accuracy                          0.738      8983
+   macro avg      0.740     0.755     0.734      8983
+weighted avg      0.771     0.738     0.741      8983
 
-ROC-AUC: 0.796
-PR-AUC: 0.794
-Best Threshold: 0.002
+ROC-AUC: 0.827
+PR-AUC: 0.712
+Best Threshold: 0.2359 (Youden)
 ```

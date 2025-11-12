@@ -1,21 +1,26 @@
 #!/usr/bin/env python3
 """
-FINAL WORKING VERSION - RandomForest Only
-------------------------------------------
-🎯 Solution: XGBoost has collapsed probabilities, so we use RF only
-✅ This produces proper probabilities in 5%-95% range
+ROBUST Training Pipeline - Alternative Approach
+------------------------------------------------
+🔑 Key differences:
+1. Use RobustScaler instead of StandardScaler (handles outliers)
+2. Clip extreme values before scaling
+3. Add feature importance analysis
+4. Simpler ensemble (just average probabilities)
+5. More diagnostic output
 """
 
 import os
 import pandas as pd
 import numpy as np
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import RobustScaler
 from sklearn.metrics import (
     classification_report, confusion_matrix, roc_auc_score,
     precision_recall_curve, auc, f1_score, roc_curve,
     accuracy_score, balanced_accuracy_score
 )
 from sklearn.ensemble import RandomForestClassifier
+from xgboost import XGBClassifier
 from imblearn.over_sampling import SMOTE
 import seaborn as sns
 import matplotlib.pyplot as plt
@@ -56,6 +61,7 @@ text_df[numeric_cols] = text_df[numeric_cols].apply(lambda col: col.fillna(col.m
 graph_train = pd.read_csv(GRAPH_TRAIN)
 graph_test = pd.read_csv(GRAPH_TEST)
 
+# Merge with graph features
 train_df = text_df[text_df["id"].isin(graph_train["node_id"])]
 test_df = text_df[text_df["id"].isin(graph_test["node_id"])]
 
@@ -85,20 +91,53 @@ y_train = train_merged["label"].astype(int).values
 y_test = test_merged["label"].astype(int).values
 
 # ======================
-# Scale SNA features only
+# Diagnostic: Check embedding quality
 # ======================
-print("\n⚙️ Scaling ONLY SNA features (embeddings already normalized)...")
-sna_scaler = StandardScaler()
+print("\n🔍 EMBEDDING DIAGNOSTICS:")
+emb_norms = np.linalg.norm(X_train_emb, axis=1)
+print(f"   L2 norms - Min: {emb_norms.min():.4f}, Max: {emb_norms.max():.4f}, Mean: {emb_norms.mean():.4f}")
+emb_var = X_train_emb.var(axis=0).mean()
+print(f"   Mean variance across dimensions: {emb_var:.6f}")
+
+if emb_norms.mean() < 0.1:
+    print("   ⚠️  WARNING: Embeddings seem corrupted (norms too small)")
+if emb_var < 0.001:
+    print("   ⚠️  WARNING: Embeddings have very low variance")
+
+# ======================
+# 🔑 ROBUST APPROACH: Clip outliers and use RobustScaler
+# ======================
+print("\n⚙️ Processing SNA features with robust methods...")
+
+# Clip extreme outliers (beyond 99th percentile)
+for i in range(X_train_sna.shape[1]):
+    p99 = np.percentile(X_train_sna[:, i], 99)
+    X_train_sna[:, i] = np.clip(X_train_sna[:, i], None, p99)
+    X_test_sna[:, i] = np.clip(X_test_sna[:, i], None, p99)
+
+print("   ✅ Clipped extreme outliers")
+
+# Use RobustScaler (median and IQR, robust to outliers)
+sna_scaler = RobustScaler()
 X_train_sna_scaled = sna_scaler.fit_transform(X_train_sna)
 X_test_sna_scaled = sna_scaler.transform(X_test_sna)
 
-# Combine
+print("   ✅ Applied RobustScaler to SNA features")
+
+# Check SNA feature statistics
+print(f"\n📊 SNA Feature Statistics (after scaling):")
+print(f"   Min: {X_train_sna_scaled.min():.4f}")
+print(f"   Max: {X_train_sna_scaled.max():.4f}")
+print(f"   Mean: {X_train_sna_scaled.mean():.4f}")
+print(f"   Std: {X_train_sna_scaled.std():.4f}")
+
+# Combine: RAW embeddings + ROBUST SCALED SNA
 X_train_combined = np.hstack([X_train_emb, X_train_sna_scaled])
 X_test_combined = np.hstack([X_test_emb, X_test_sna_scaled])
 
-print(f"✅ Combined features shape: Train={X_train_combined.shape}, Test={X_test_combined.shape}")
-print(f"   Embedding features: {X_train_emb.shape[1]} (NOT scaled)")
-print(f"   SNA features: {X_train_sna.shape[1]} (scaled)")
+print(f"\n✅ Combined features shape: Train={X_train_combined.shape}, Test={X_test_combined.shape}")
+print(f"   Embedding features: {X_train_emb.shape[1]} (raw)")
+print(f"   SNA features: {X_train_sna.shape[1]} (robust scaled)")
 
 # ======================
 # Apply SMOTE
@@ -109,42 +148,69 @@ X_train_balanced, y_train_balanced = smote.fit_resample(X_train_combined, y_trai
 print(f"✅ After SMOTE: {dict(zip(*np.unique(y_train_balanced, return_counts=True)))}")
 
 # ======================
-# Train RandomForest ONLY (XGBoost is broken)
+# Train base models with STRONGER settings
 # ======================
-print("\n🧠 Training RandomForest (XGBoost excluded - produces collapsed probabilities)...")
+print("\n🧠 Training models with stronger settings...")
 
 rf = RandomForestClassifier(
-    n_estimators=500,  # More trees
-    max_depth=None,    # No depth limit
+    n_estimators=300,
+    max_depth=None,  # No limit
     min_samples_split=5,
     min_samples_leaf=2,
     max_features='sqrt',
     class_weight='balanced',
     random_state=42,
     n_jobs=-1,
-    verbose=1
+    verbose=0
+)
+
+xgb = XGBClassifier(
+    n_estimators=300,
+    learning_rate=0.1,
+    max_depth=8,
+    subsample=0.8,
+    colsample_bytree=0.8,
+    scale_pos_weight=1.0,
+    eval_metric="logloss",
+    random_state=42,
+    n_jobs=-1,
+    verbosity=0
 )
 
 rf.fit(X_train_balanced, y_train_balanced)
-print("✅ RandomForest trained")
+xgb.fit(X_train_balanced, y_train_balanced)
+
+print("✅ Base models trained")
 
 # ======================
-# Evaluate on test set
+# SIMPLER ENSEMBLE: Just average
 # ======================
-print("\n🧪 Evaluating on test set...")
-final_probs = rf.predict_proba(X_test_combined)[:, 1]
+print("\n🔄 Using simple averaging ensemble...")
+rf_probs_test = rf.predict_proba(X_test_combined)[:, 1]
+xgb_probs_test = xgb.predict_proba(X_test_combined)[:, 1]
 
-print(f"\n📊 Probability distribution:")
-print(f"   Min: {final_probs.min():.4f}")
-print(f"   Max: {final_probs.max():.4f}")
+# Simple average
+final_probs = (rf_probs_test + xgb_probs_test) / 2
+
+print(f"\n📊 Individual model probability distributions:")
+print(f"   RF  - Min: {rf_probs_test.min():.4f}, Max: {rf_probs_test.max():.4f}, Mean: {rf_probs_test.mean():.4f}")
+print(f"   XGB - Min: {xgb_probs_test.min():.4f}, Max: {xgb_probs_test.max():.4f}, Mean: {xgb_probs_test.mean():.4f}")
+print(f"\n📊 Averaged probability distribution:")
+print(f"   Min: {final_probs.min():.4f}, Max: {final_probs.max():.4f}")
 print(f"   Mean: {final_probs.mean():.4f}, Median: {np.median(final_probs):.4f}")
 print(f"   Std: {final_probs.std():.4f}")
 
-if final_probs.max() < 0.5:
-    print("\n⚠️  WARNING: Max probability is still low, but this is the best we can get")
-    print("   The model is learning SOMETHING, just not very confident predictions")
+# Sanity check
+if final_probs.max() < 0.1:
+    print("\n❌ CRITICAL ERROR: Probabilities STILL too low!")
+    print("   Possible causes:")
+    print("   1. Embeddings are fundamentally corrupted")
+    print("   2. Text data quality is very poor")
+    print("   3. Features have no discriminative power")
+    print("\n   🔧 RECOMMENDATION: Regenerate embeddings from scratch")
+    print("      python3 src/generate_embeddings.py")
 else:
-    print("\n✅ Probabilities are in reasonable range!")
+    print("✅ Probabilities are in reasonable range")
 
 # ======================
 # Find optimal threshold
@@ -218,15 +284,14 @@ print(f"Best Threshold: {best_thresh:.4f}")
 # Save results
 with open(os.path.join(REPORT_DIR, "results.txt"), "w") as f:
     f.write("="*60 + "\n")
-    f.write("FINAL MODEL EVALUATION (RandomForest Only)\n")
+    f.write("FINAL MODEL EVALUATION (ROBUST VERSION)\n")
     f.write("="*60 + "\n\n")
     f.write(report + "\n")
     f.write(f"ROC-AUC: {roc_auc:.3f}\n")
     f.write(f"PR-AUC: {pr_auc:.3f}\n")
     f.write(f"Best Threshold: {best_thresh:.4f} ({best_name})\n")
-    f.write(f"\nNote: XGBoost excluded due to collapsed probabilities\n")
 
-# Plots
+# Plots (same as before)
 cm = confusion_matrix(y_test, final_preds)
 plt.figure(figsize=(6, 5))
 sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", 
@@ -241,10 +306,9 @@ plt.close()
 plt.figure(figsize=(8, 6))
 plt.plot(fpr, tpr, label=f"ROC (AUC={roc_auc:.3f})", linewidth=2)
 plt.plot([0, 1], [0, 1], "k--", alpha=0.3)
-plt.scatter(fpr[idx_youden], tpr[idx_youden], color='red', s=100, zorder=5)
 plt.xlabel("False Positive Rate")
 plt.ylabel("True Positive Rate")
-plt.title("ROC Curve - RandomForest Only")
+plt.title("ROC Curve")
 plt.legend()
 plt.grid(alpha=0.3)
 plt.tight_layout()
@@ -265,7 +329,7 @@ plt.savefig(os.path.join(REPORT_DIR, "probability_distribution.png"), dpi=150)
 plt.close()
 
 # ======================
-# Save model
+# Save model - SIMPLIFIED
 # ======================
 feature_info = {
     'embedding_cols': embedding_cols,
@@ -274,9 +338,11 @@ feature_info = {
     'n_sna_features': X_train_sna.shape[1]
 }
 
+# Save simple averaging ensemble
 model_package = {
     'rf': rf,
-    'ensemble_type': 'rf_only',
+    'xgb': xgb,
+    'ensemble_type': 'average',  # Simple average, no meta-model
     'sna_scaler': sna_scaler,
     'threshold': best_thresh,
     'feature_info': feature_info
@@ -293,7 +359,7 @@ print("\n" + "="*60)
 print("💡 SAMPLE PREDICTIONS")
 print("="*60)
 
-sample_indices = np.random.choice(len(y_test), size=min(15, len(y_test)), replace=False)
+sample_indices = np.random.choice(len(y_test), size=min(10, len(y_test)), replace=False)
 for idx in sample_indices:
     true_label = "Fake" if y_test[idx] == 1 else "Real"
     pred_label = "Fake" if final_preds[idx] == 1 else "Real"
@@ -304,11 +370,3 @@ for idx in sample_indices:
 
 print("\n🎉 Training complete!")
 print(f"🎯 Key metrics: Accuracy={accuracy_score(y_test, final_preds):.3f}, F1={f1_score(y_test, final_preds):.3f}")
-
-print("\n" + "="*60)
-print("📝 IMPORTANT NOTE")
-print("="*60)
-print("XGBoost was excluded because it produces collapsed probabilities (~0.0003)")
-print("This is likely due to the high dimensionality of embeddings (768 dims)")
-print("RandomForest handles this better and produces probabilities in 5%-50% range")
-print("="*60)
