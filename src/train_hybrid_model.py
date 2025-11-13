@@ -2,8 +2,8 @@
 """
 FINAL WORKING VERSION - RandomForest Only
 ------------------------------------------
-🎯 Solution: XGBoost has collapsed probabilities, so we use RF only
-✅ This produces proper probabilities in 5%-95% range
+Solution: XGBoost has collapsed probabilities, so we use RF only
+This produces proper probabilities in 5%-95% range
 """
 
 import os
@@ -46,7 +46,7 @@ text_df = pd.read_csv(
     on_bad_lines="skip",
     engine="python"
 )
-print(f"✅ Loaded embeddings: {text_df.shape}")
+print(f"Loaded embeddings: {text_df.shape}")
 
 # Clean corrupted values
 numeric_cols = [c for c in text_df.columns if c.isdigit()]

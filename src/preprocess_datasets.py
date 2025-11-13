@@ -38,7 +38,7 @@ def load_gossipcop():
     text_col_real = next((c for c in possible_cols if c in real_df.columns), None)
 
     if text_col_fake is None or text_col_real is None:
-        raise KeyError("❌ Missing text column in GossipCop CSVs")
+        raise KeyError("Missing text column in GossipCop CSVs")
 
     fake_df = fake_df.rename(columns={text_col_fake: "text"})
     real_df = real_df.rename(columns={text_col_real: "text"})
@@ -48,7 +48,7 @@ def load_gossipcop():
     df["source"] = "gossipcop"
     df["id"] = ["gc_" + str(i) for i in range(len(df))]
 
-    print(f"✅ Loaded GossipCop: {df.shape}")
+    print(f" Loaded GossipCop: {df.shape}")
     return df
 
 
@@ -81,13 +81,13 @@ def load_politifact():
     df = pd.DataFrame(items)
     df.columns = [c.lower().strip() for c in df.columns]
 
-    # ✅ Find usable text field
+    # Find usable text field
     for col in ["text", "content", "statement", "claim"]:
         if col in df.columns:
             df["text"] = df[col]
             break
 
-    # ✅ Get correct label field
+    # Get correct label field
     label_col = None
     for c in ["label", "verdict", "rating", "label_text"]:
         if c in df.columns:
@@ -95,7 +95,7 @@ def load_politifact():
             break
 
     if label_col is None:
-        print("⚠️ No label column found in PolitiFact; skipping fake/real classification.")
+        print("No label column found in PolitiFact; skipping fake/real classification.")
         df["label"] = 0
     else:
         fake_terms = ["false", "pants-fire", "barely-true", "mostly-false"]
@@ -107,7 +107,7 @@ def load_politifact():
     df["source"] = "politifact"
     df["id"] = ["pf_" + str(i) for i in range(len(df))]
 
-    print(f"✅ Loaded PolitiFact: {df.shape}")
+    print(f"Loaded PolitiFact: {df.shape}")
     print(df['label'].value_counts())
     return df
 
@@ -117,7 +117,7 @@ def load_politifact():
 # 3️⃣ Load CoAID dataset
 # ---------------------------
 def load_coaid(path="data/raw/CoAID/news"):
-    print("📥 Loading CoAID...")
+    print("Loading CoAID...")
     files = glob.glob(os.path.join(path, "*.csv"))
     print(f"Found {len(files)} files")
 
@@ -138,7 +138,7 @@ def load_coaid(path="data/raw/CoAID/news"):
             elif "title" in df.columns:
                 text_col = "title"
             else:
-                print(f"⚠️ Skipping {filename} — no valid text column.")
+                print(f" Skipping {filename} — no valid text column.")
                 continue
 
             df["text"] = df[text_col].astype(str).fillna("")
@@ -149,17 +149,17 @@ def load_coaid(path="data/raw/CoAID/news"):
             df["id"] = [f"coaid_{os.path.splitext(filename)[0]}_{i}" for i in range(len(df))]
 
             dfs.append(df[["text", "source", "id", "label"]])
-            print(f"✅ Loaded {filename}: {len(df)} rows")
+            print(f"Loaded {filename}: {len(df)} rows")
 
         except Exception as e:
-            print(f"⚠️ Error loading {filename}: {e}")
+            print(f"Error loading {filename}: {e}")
 
     if not dfs:
-        print("⚠️ No CoAID files loaded.")
+        print("No CoAID files loaded.")
         return pd.DataFrame(columns=["text", "source", "id", "label"])
 
     merged = pd.concat(dfs, ignore_index=True)
-    print(f"✅ Loaded CoAID: {merged.shape}")
+    print(f"Loaded CoAID: {merged.shape}")
     print(merged['label'].value_counts())
     return merged
 
@@ -175,6 +175,6 @@ if __name__ == "__main__":
     df_all = pd.concat([df_gc, df_pf, df_coaid], ignore_index=True)
     df_all = df_all.dropna(subset=["text"]).drop_duplicates(subset=["text"])
 
-    print(f"✅ Final merged dataset: {df_all.shape}")
+    print(f"Final merged dataset: {df_all.shape}")
     df_all.to_csv(OUT_PATH, index=False)
     print(f"💾 Saved to {OUT_PATH}")

@@ -19,7 +19,7 @@ os.makedirs(OUT_DIR, exist_ok=True)
 def main():
     print("🔹 Loading articles...")
     df = pd.read_csv(INPUT)
-    print(f"✅ Loaded articles: {len(df)}")
+    print(f"Loaded articles: {len(df)}")
     
     # Verify text column exists and has content
     if 'text' not in df.columns:
@@ -32,7 +32,7 @@ def main():
     
     # Remove empty texts
     df = df[df['text'].str.len() > 10]
-    print(f"✅ After removing empty texts: {len(df)}")
+    print(f" After removing empty texts: {len(df)}")
     
     # Check sample texts
     print("\n📄 Sample texts:")
@@ -50,7 +50,7 @@ def main():
         texts, 
         show_progress_bar=True, 
         convert_to_numpy=True,
-        normalize_embeddings=True  # ✅ Explicitly normalize
+        normalize_embeddings=True  # Explicitly normalize
     )
     
     print(f"\n✅ Generated embeddings shape: {embeddings.shape}")

@@ -31,7 +31,7 @@ os.makedirs(FEATURES_DIR, exist_ok=True)
 EMBED_PATH = "data/model/text_embeddings.csv"
 print(f"📂 Loading embeddings from {EMBED_PATH}...")
 
-# ✅ FIX: Safe loading with encoding handling
+#FIX: Safe loading with encoding handling
 try:
     with open(EMBED_PATH, "rb") as f:
         raw_bytes = f.read()
@@ -41,7 +41,7 @@ try:
         on_bad_lines="skip",
         engine="python"
     )
-    print(f"✅ Loaded embeddings with encoding fix: {df.shape}")
+    print(f"Loaded embeddings with encoding fix: {df.shape}")
 except Exception as e:
     print(f"❌ Error loading embeddings: {e}")
     print("🔧 Attempting to regenerate embeddings...")
@@ -55,7 +55,7 @@ embedding_cols = [c for c in df.columns if str(c).isdigit()]
 df[embedding_cols] = df[embedding_cols].apply(pd.to_numeric, errors='coerce')
 df[embedding_cols] = df[embedding_cols].apply(lambda col: col.fillna(col.mean()))
 
-print(f"✅ Cleaned embeddings: {df.shape}")
+print(f"Cleaned embeddings: {df.shape}")
 
 # Verify required columns
 required_cols = ['id', 'label']
@@ -126,24 +126,24 @@ if G.number_of_nodes() < 100:
 # -------------------------------
 # Compute Graph Metrics
 # -------------------------------
-print("📈 Computing graph metrics...")
-print("   - Degree centrality...")
+print("Computing graph metrics...")
+print("Degree centrality...")
 degree = dict(G.degree())
 
-print("   - PageRank...")
+print("PageRank...")
 pagerank = nx.pagerank(G, alpha=0.85, max_iter=100)
 
-print("   - Clustering coefficient...")
+print("Clustering coefficient...")
 clustering = nx.clustering(G)
 
-print("   - Closeness centrality (may take time)...")
+print("Closeness centrality (may take time)...")
 # Only compute for largest component to save time
 largest_cc = max(nx.connected_components(G), key=len)
 subG = G.subgraph(largest_cc)
 closeness_partial = nx.closeness_centrality(subG)
 closeness = {n: closeness_partial.get(n, 0) for n in G.nodes()}
 
-print("   - Eigenvector centrality...")
+print("Eigenvector centrality...")
 try:
     eigenvector = nx.eigenvector_centrality(subG, max_iter=500, tol=1e-06)
     eigenvector = {n: eigenvector.get(n, 0) for n in G.nodes()}
@@ -151,7 +151,7 @@ except Exception as e:
     print(f"   ⚠️ Eigenvector centrality failed: {e}")
     eigenvector = {n: 0 for n in G.nodes()}
 
-print("   - Community detection (Louvain)...")
+print("Community detection (Louvain)...")
 try:
     from networkx.algorithms.community import louvain_communities
     communities = louvain_communities(G, seed=42)
